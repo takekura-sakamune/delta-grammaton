@@ -4,3 +4,4 @@
 .event-info{margin-top:36px;padding-top:22px;border-top:1px solid var(--line)}.event-info p{margin:0 0 10px}.event-info a{display:inline-block;margin-top:8px;font-size:12px;letter-spacing:.06em;text-decoration:none;border-bottom:1px solid var(--text)}
 .footer-x img{width:72px;height:72px}
 .site-counter{display:flex;align-items:baseline;gap:14px;margin:12px 0 0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;letter-spacing:.16em}.site-counter strong{color:var(--text);font-size:16px;font-weight:600;letter-spacing:.04em;font-variant-numeric:tabular-nums}
+.site-counter{align-items:center}.site-counter img{display:block;width:180px;height:auto;max-width:100%}
