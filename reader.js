@@ -80,7 +80,11 @@ async function openPdf(source, title) {
   status('PDFを読み込んでいます…');
   try {
     if (previousTask) await previousTask.destroy();
-    library ||= import(base + 'build/pdf.mjs');
+    library ||= import(base + 'build/pdf.mjs').catch(cause => {
+      library = null;
+      const error = new Error('PDF表示用ファイル vendor/pdfjs/build/pdf.mjs を読み込めません。vendorフォルダー全体を公開先へ配置してください。');
+      error.name = 'PDFLibraryError'; error.cause = cause; throw error;
+    });
     const pdfjs = await library;
     if (token !== opening) return;
     pdfjs.GlobalWorkerOptions.workerSrc = base + 'build/pdf.worker.mjs';
@@ -92,7 +96,7 @@ async function openPdf(source, title) {
   } catch (error) {
     if (token === opening) {
       console.error('PDF loading failed:', error);
-      const reason = error.name === 'PasswordException' ? 'パスワード付きPDFは解除してから開いてください。' : error.name === 'MissingPDFException' ? 'PDFファイルが見つかりません。' : error.name === 'InvalidPDFException' ? 'PDFファイルの形式を確認してください。' : 'PDFまたは表示用ファイルを読み込めませんでした。';
+      const reason = error.name === 'PDFLibraryError' ? error.message : /worker/i.test(error.message || '') ? 'PDF処理用ファイルを読み込めません。vendor/pdfjs/build/pdf.worker.mjs が公開されているか確認してください。' : error.name === 'PasswordException' ? 'パスワード付きPDFは解除してから開いてください。' : error.name === 'MissingPDFException' ? 'PDFファイルが見つかりません。pdfフォルダー内のPDFも公開先へ配置してください。' : error.name === 'InvalidPDFException' ? 'PDFファイルの形式を確認してください。' : 'PDFまたは表示用ファイルを読み込めませんでした。';
       status('PDFを開けませんでした。' + reason);
     }
   }
@@ -169,8 +173,12 @@ $('file').addEventListener('change', async () => {
   const file = $('file').files[0];
   if (!file) return;
   $('books').value = '';
-  await openPdf({ data: new Uint8Array(await file.arrayBuffer()) }, file.name.replace(/\.pdf$/i, ''));
-  $('file').value = '';
+  try {
+    await openPdf({ data: new Uint8Array(await file.arrayBuffer()) }, file.name.replace(/\.pdf$/i, ''));
+  } catch (error) {
+    console.error('Local PDF read failed:', error);
+    status('選択したファイルを読み取れませんでした。ファイルを選び直してください。');
+  } finally { $('file').value = ''; }
 });
 $('books').addEventListener('change', () => {
   if ($('books').value) openPdf({ url: $('books').value }, $('books').selectedOptions[0].textContent);
@@ -189,8 +197,11 @@ if (location.protocol === 'file:') {
   status('この画面を直接開くとブラウザーの制限でPDFを読み込めません。サイトのURL、または「サイトを確認.cmd」で起動したURLから開いてください。');
 } else try {
   const response = await fetch('pdf/catalog.json', { cache: 'no-cache' });
-  if (!response.ok) throw new Error('catalog');
-  const books = await response.json();
+  if (!response.ok) throw new Error('pdf/catalog.json を取得できません（HTTP ' + response.status + '）。pdfフォルダー全体を公開先へ配置してください。');
+  let books;
+  try { books = await response.json(); }
+  catch { throw new Error('pdf/catalog.json が正しいJSONではありません。ファイルの内容を確認してください。'); }
+  if (!Array.isArray(books) || books.some(book => !book || typeof book.title !== 'string' || typeof book.file !== 'string')) throw new Error('pdf/catalog.json の作品名・PDFパスの形式を確認してください。');
   for (const book of books) {
     const url = new URL(book.file, location.href);
     if (url.origin !== location.origin || !url.pathname.toLowerCase().endsWith('.pdf')) continue;
@@ -207,6 +218,9 @@ if (location.protocol === 'file:') {
     }
   }
   if (!books.length) $('books').selectedOptions[0].textContent = '公開PDFは準備中';
-} catch { status('公開作品一覧を読み込めませんでした。手元のPDFは開けます。'); }
+} catch (error) {
+  console.error('PDF catalog failed:', error);
+  status('公開作品一覧を読み込めませんでした。' + (error.message || 'pdf/catalog.json の配置を確認してください。'));
+}
 
 })();
