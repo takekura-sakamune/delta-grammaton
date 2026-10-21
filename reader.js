@@ -66,6 +66,7 @@ async function render() {
 }
 function go(page) {
   if (!documentPdf) return;
+  if (document.body.classList.contains('touch-input') && document.activeElement !== $('position')) hideTouchControls();
   current = first(Math.max(1, Math.min(documentPdf.numPages, page)));
   render();
 }
@@ -114,13 +115,27 @@ $('zoom-out').addEventListener('click', () => setZoom(zoom - 10));
 $('zoom-in').addEventListener('click', () => setZoom(zoom + 10));
 $('zoom-reset').addEventListener('click', () => setZoom(100));
 let touchTimer;
+function hideTouchControls() {
+  clearTimeout(touchTimer);
+  document.body.classList.remove('touch-controls', 'near-top', 'near-bottom', 'near-left', 'near-right');
+  const focused = document.activeElement;
+  if (focused && focused.closest('.reader-top, .page-controls, .edge-zone')) focused.blur();
+}
+document.addEventListener('pointerdown', event => {
+  if (event.pointerType === 'touch') {
+    document.body.classList.add('touch-input');
+    document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
+  } else if (event.pointerType === 'mouse' && !event.sourceCapabilities?.firesTouchEvents) {
+    document.body.classList.remove('touch-input');
+  }
+}, { passive: true });
 function showTouchControls() {
   document.body.classList.add('touch-controls');
   clearTimeout(touchTimer);
   touchTimer = setTimeout(() => document.body.classList.remove('touch-controls'), 4000);
 }
 document.addEventListener('pointermove', event => {
-  if (event.pointerType === 'touch') return;
+  if (event.pointerType !== 'mouse' || document.body.classList.contains('touch-input') || event.sourceCapabilities?.firesTouchEvents) return;
   const topHeight = document.querySelector('.reader-top').getBoundingClientRect().bottom;
   document.body.classList.toggle('near-top', event.clientY <= Math.max(64, topHeight + 20));
   document.body.classList.toggle('near-bottom', event.clientY >= window.innerHeight - 160);
@@ -130,12 +145,42 @@ document.addEventListener('pointermove', event => {
 document.addEventListener('pointerleave', () => {
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
 });
-$('stage').addEventListener('pointerup', event => {
-  if (event.pointerType !== 'touch') return;
-  if (document.body.classList.contains('touch-controls')) {
-    document.body.classList.remove('touch-controls'); clearTimeout(touchTimer);
-  } else showTouchControls();
-});
+// Distinguish a tap from a swipe: a swipe must never reveal the panels.
+let touchGesture = null;
+$('stage').addEventListener('touchstart', event => {
+  document.body.classList.add('touch-input');
+  document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
+  if (event.touches.length !== 1) { touchGesture = null; return; }
+  const touch = event.touches[0];
+  touchGesture = { x: touch.clientX, y: touch.clientY, started: Date.now(), moved: false, swipe: false, reading: zoom <= 100 };
+}, { passive: true });
+$('stage').addEventListener('touchmove', event => {
+  if (!touchGesture || event.touches.length !== 1) { touchGesture = null; return; }
+  const dx = event.touches[0].clientX - touchGesture.x;
+  const dy = event.touches[0].clientY - touchGesture.y;
+  if (Math.hypot(dx, dy) > 10) touchGesture.moved = true;
+  if (touchGesture.reading && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+    touchGesture.swipe = true;
+    event.preventDefault();
+    hideTouchControls();
+  }
+}, { passive: false });
+$('stage').addEventListener('touchend', event => {
+  const gesture = touchGesture;
+  touchGesture = null;
+  if (!gesture || event.touches.length || !event.changedTouches.length) return;
+  const dx = event.changedTouches[0].clientX - gesture.x;
+  const dy = event.changedTouches[0].clientY - gesture.y;
+  if (gesture.reading && gesture.swipe && Math.abs(dy) >= 50 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+    hideTouchControls();
+    if (documentPdf) { if (dy < 0) next(); else previous(); }
+  } else if (!gesture.moved && Math.hypot(dx, dy) <= 10 && Date.now() - gesture.started < 400) {
+    if (document.body.classList.contains('touch-controls')) hideTouchControls();
+    else showTouchControls();
+  }
+}, { passive: true });
+$('stage').addEventListener('touchcancel', () => { touchGesture = null; }, { passive: true });
+
 document.querySelectorAll('.reader-top, .page-controls, .edge-zone').forEach(panel => {
   panel.addEventListener('pointerdown', event => { if (event.pointerType === 'touch') showTouchControls(); });
 });
