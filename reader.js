@@ -73,6 +73,7 @@ function go(page) {
 function next() { if (documentPdf) go(pages().at(-1) + 1); }
 function previous() { go(first(current) - 1); }
 async function openPdf(source, title) {
+  cancelTouchNavigation();
   const token = ++opening;
   ++revision;
   const previousTask = loadingTask;
@@ -103,6 +104,7 @@ async function openPdf(source, title) {
   }
 }
 function setZoom(value) {
+  cancelTouchNavigation();
   const number = Number(value);
   zoom = Number.isFinite(number) ? Math.max(50, Math.min(300, Math.round(number))) : 100;
   $('zoom').value = zoom;
@@ -145,41 +147,110 @@ document.addEventListener('pointermove', event => {
 document.addEventListener('pointerleave', () => {
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
 });
-// Distinguish a tap from a swipe: a swipe must never reveal the panels.
-let touchGesture = null;
+// Touch navigation previews a destination and commits only on release.
+let touchGesture = null, pendingTap = null, pendingTapTimer;
+function clearPendingTap() {
+  clearTimeout(pendingTapTimer);
+  pendingTap = null;
+}
+function hideSwipePreview() { $('swipe-preview').hidden = true; }
+function cancelTouchNavigation() {
+  touchGesture = null;
+  clearPendingTap();
+  hideSwipePreview();
+}
+function swipeDestination(origin, direction, distance, extent) {
+  const interval = Math.max(18, (extent * .8 - 40) / 9);
+  const steps = Math.min(10, 1 + Math.floor(Math.max(0, distance - 40) / interval));
+  let target = first(Math.max(1, Math.min(documentPdf.numPages, origin + direction * steps)));
+  // Preserve spread grouping while still making a short swipe turn one spread.
+  if (target === origin && direction > 0) {
+    target = first(Math.min(documentPdf.numPages, origin + ($('mode').value === 'spread' ? 2 : 1)));
+  }
+  return target;
+}
+function updateSwipe(gesture, x, y) {
+  const dx = x - gesture.x, dy = y - gesture.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > 10) gesture.moved = true;
+  if (distance <= 12) {
+    gesture.distance = 0; gesture.target = gesture.origin;
+    hideSwipePreview();
+    return;
+  }
+  if (!gesture.reading || !documentPdf) return;
+  if (gesture.pdf !== documentPdf || gesture.origin !== current || gesture.mode !== $('mode').value || gesture.cover !== $('cover').checked) {
+    cancelTouchNavigation(); return;
+  }
+  gesture.axis ||= Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+  const delta = gesture.axis === 'x' ? dx : dy;
+  gesture.distance = Math.abs(delta);
+  gesture.direction = delta < 0 ? 1 : -1;
+  gesture.target = swipeDestination(gesture.origin, gesture.direction, gesture.distance, gesture.axis === 'x' ? $('stage').clientWidth : $('stage').clientHeight);
+  hideTouchControls();
+  clearPendingTap();
+  const last = $('mode').value === 'spread' && !($('cover').checked && gesture.target === 1) ? Math.min(documentPdf.numPages, gesture.target + 1) : gesture.target;
+  const label = gesture.target === last ? String(gesture.target) : gesture.target + '–' + last;
+  const actual = Math.abs(gesture.target - gesture.origin);
+  $('swipe-target').textContent = label + ' / ' + documentPdf.numPages + ' ページ';
+  $('swipe-distance').textContent = gesture.distance < 40 ? 'そのまま動かすと移動します' : actual ? actual + 'ページ' + (gesture.direction > 0 ? '先へ' : '前へ') + ' · 指を離して確定' : 'これ以上移動できません';
+  $('swipe-progress').value = Math.min(10, actual);
+  $('swipe-preview').hidden = false;
+}
+function handleReadingTap(x, y) {
+  const rect = $('stage').getBoundingClientRect();
+  const zoneSize = Math.min(120, rect.height * .2);
+  const zone = y - rect.top < zoneSize ? 'top' : rect.bottom - y < zoneSize ? 'bottom' : '';
+  const now = Date.now();
+  if (zone && pendingTap && pendingTap.zone === zone && now - pendingTap.time <= 320 && Math.hypot(x - pendingTap.x, y - pendingTap.y) < 48) {
+    clearPendingTap();
+    if (document.body.classList.contains('touch-controls')) hideTouchControls(); else showTouchControls();
+    return;
+  }
+  // Delay taps near the panel trigger zones so double taps never turn a page.
+  if (pendingTap) { const previousTap = pendingTap; clearPendingTap(); previousTap.commit(); }
+  const pdf = documentPdf;
+  const commit = () => {
+    if (!pdf || pdf !== documentPdf) return;
+    hideTouchControls();
+    if (x - rect.left < rect.width / 2) next(); else previous();
+  };
+  if (zone) {
+    pendingTap = { x, y, zone, time: now, commit };
+    pendingTapTimer = setTimeout(() => { pendingTap = null; commit(); }, 320);
+  } else commit();
+}
 $('stage').addEventListener('touchstart', event => {
   document.body.classList.add('touch-input');
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
-  if (event.touches.length !== 1) { touchGesture = null; return; }
+  if (event.touches.length !== 1) { cancelTouchNavigation(); return; }
   const touch = event.touches[0];
-  touchGesture = { x: touch.clientX, y: touch.clientY, started: Date.now(), moved: false, swipe: false, reading: zoom <= 100 };
+  touchGesture = { x: touch.clientX, y: touch.clientY, started: Date.now(), moved: false, reading: zoom <= 100, origin: current, pdf: documentPdf, mode: $('mode').value, cover: $('cover').checked };
 }, { passive: true });
 $('stage').addEventListener('touchmove', event => {
-  if (!touchGesture || event.touches.length !== 1) { touchGesture = null; return; }
-  const dx = event.touches[0].clientX - touchGesture.x;
-  const dy = event.touches[0].clientY - touchGesture.y;
-  if (Math.hypot(dx, dy) > 10) touchGesture.moved = true;
-  if (touchGesture.reading && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
-    touchGesture.swipe = true;
-    event.preventDefault();
-    hideTouchControls();
-  }
+  if (!touchGesture || event.touches.length !== 1) { cancelTouchNavigation(); return; }
+  updateSwipe(touchGesture, event.touches[0].clientX, event.touches[0].clientY);
+  if (touchGesture?.reading && event.cancelable !== false) event.preventDefault();
 }, { passive: false });
 $('stage').addEventListener('touchend', event => {
   const gesture = touchGesture;
+  if (!gesture || event.touches.length || !event.changedTouches.length) { cancelTouchNavigation(); return; }
+  const touch = event.changedTouches[0];
+  updateSwipe(gesture, touch.clientX, touch.clientY);
+  if (touchGesture !== gesture) return;
   touchGesture = null;
-  if (!gesture || event.touches.length || !event.changedTouches.length) return;
-  const dx = event.changedTouches[0].clientX - gesture.x;
-  const dy = event.changedTouches[0].clientY - gesture.y;
-  if (gesture.reading && gesture.swipe && Math.abs(dy) >= 50 && Math.abs(dy) > Math.abs(dx) * 1.2) {
-    hideTouchControls();
-    if (documentPdf) { if (dy < 0) next(); else previous(); }
-  } else if (!gesture.moved && Math.hypot(dx, dy) <= 10 && Date.now() - gesture.started < 400) {
-    if (document.body.classList.contains('touch-controls')) hideTouchControls();
-    else showTouchControls();
+  hideSwipePreview();
+  if (gesture.reading && gesture.distance >= 40 && gesture.target !== undefined) {
+    clearPendingTap();
+    if (gesture.target !== current) go(gesture.target);
+  } else if (!gesture.moved && Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) <= 10 && Date.now() - gesture.started < 400) {
+    // Prevent the browser's double-tap zoom; pinch zoom remains available.
+    event.preventDefault();
+    handleReadingTap(touch.clientX, touch.clientY);
   }
-}, { passive: true });
-$('stage').addEventListener('touchcancel', () => { touchGesture = null; }, { passive: true });
+}, { passive: false });
+$('stage').addEventListener('touchcancel', cancelTouchNavigation, { passive: true });
+window.addEventListener('blur', cancelTouchNavigation);
 
 document.querySelectorAll('.reader-top, .page-controls, .edge-zone').forEach(panel => {
   panel.addEventListener('pointerdown', event => { if (event.pointerType === 'touch') showTouchControls(); });
