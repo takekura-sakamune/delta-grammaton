@@ -148,13 +148,14 @@ document.addEventListener('pointerleave', () => {
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
 });
 // Touch navigation previews a destination and commits only on release.
-let touchGesture = null, pendingTap = null, pendingTapTimer;
+let touchGesture = null, pendingTap = null, pendingTapTimer, longPressTimer;
 function clearPendingTap() {
   clearTimeout(pendingTapTimer);
   pendingTap = null;
 }
 function hideSwipePreview() { $('swipe-preview').hidden = true; }
 function cancelTouchNavigation() {
+  clearTimeout(longPressTimer);
   touchGesture = null;
   clearPendingTap();
   hideSwipePreview();
@@ -170,9 +171,10 @@ function swipeDestination(origin, direction, distance, extent) {
   return target;
 }
 function updateSwipe(gesture, x, y) {
+  if (gesture.longPressed) return;
   const dx = x - gesture.x, dy = y - gesture.y;
   const distance = Math.hypot(dx, dy);
-  if (distance > 10) gesture.moved = true;
+  if (distance > 10) { gesture.moved = true; clearTimeout(longPressTimer); }
   if (distance <= 12) {
     gesture.distance = 0; gesture.target = gesture.origin;
     hideSwipePreview();
@@ -185,7 +187,7 @@ function updateSwipe(gesture, x, y) {
   gesture.axis ||= Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
   const delta = gesture.axis === 'x' ? dx : dy;
   gesture.distance = Math.abs(delta);
-  gesture.direction = delta < 0 ? 1 : -1;
+  gesture.direction = gesture.axis === 'x' ? (delta > 0 ? 1 : -1) : (delta < 0 ? 1 : -1);
   gesture.target = swipeDestination(gesture.origin, gesture.direction, gesture.distance, gesture.axis === 'x' ? $('stage').clientWidth : $('stage').clientHeight);
   hideTouchControls();
   clearPendingTap();
@@ -221,11 +223,20 @@ function handleReadingTap(x, y) {
   } else commit();
 }
 $('stage').addEventListener('touchstart', event => {
+  clearTimeout(longPressTimer);
   document.body.classList.add('touch-input');
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
   if (event.touches.length !== 1) { cancelTouchNavigation(); return; }
   const touch = event.touches[0];
   touchGesture = { x: touch.clientX, y: touch.clientY, started: Date.now(), moved: false, reading: zoom <= 100, origin: current, pdf: documentPdf, mode: $('mode').value, cover: $('cover').checked };
+  const gesture = touchGesture;
+  longPressTimer = setTimeout(() => {
+    if (touchGesture !== gesture || gesture.moved) return;
+    gesture.longPressed = true;
+    clearPendingTap();
+    hideSwipePreview();
+    showTouchControls();
+  }, 1000);
 }, { passive: true });
 $('stage').addEventListener('touchmove', event => {
   if (!touchGesture || event.touches.length !== 1) { cancelTouchNavigation(); return; }
@@ -233,9 +244,17 @@ $('stage').addEventListener('touchmove', event => {
   if (touchGesture?.reading && event.cancelable !== false) event.preventDefault();
 }, { passive: false });
 $('stage').addEventListener('touchend', event => {
+  clearTimeout(longPressTimer);
   const gesture = touchGesture;
   if (!gesture || event.touches.length || !event.changedTouches.length) { cancelTouchNavigation(); return; }
   const touch = event.changedTouches[0];
+  if (gesture.longPressed || (!gesture.moved && Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) <= 10 && Date.now() - gesture.started >= 1000)) {
+    touchGesture = null;
+    clearPendingTap(); hideSwipePreview();
+    if (!gesture.longPressed) showTouchControls();
+    event.preventDefault();
+    return;
+  }
   updateSwipe(gesture, touch.clientX, touch.clientY);
   if (touchGesture !== gesture) return;
   touchGesture = null;
@@ -251,6 +270,9 @@ $('stage').addEventListener('touchend', event => {
 }, { passive: false });
 $('stage').addEventListener('touchcancel', cancelTouchNavigation, { passive: true });
 window.addEventListener('blur', cancelTouchNavigation);
+$('stage').addEventListener('contextmenu', event => {
+  if (document.body.classList.contains('touch-input')) event.preventDefault();
+});
 
 document.querySelectorAll('.reader-top, .page-controls, .edge-zone').forEach(panel => {
   panel.addEventListener('pointerdown', event => { if (event.pointerType === 'touch') showTouchControls(); });
