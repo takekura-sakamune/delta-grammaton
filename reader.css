@@ -15,3 +15,11 @@
 .page-stage{touch-action:pan-x pan-y pinch-zoom}
 
 .page-stage{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+
+/* The destination PDF fills the screen; navigation information floats above it. */
+.swipe-preview{inset:0;top:0;left:0;transform:none;width:100%;height:100dvh;padding:0;border-radius:0;background:#deddd7;box-shadow:none;display:block;color:var(--text)}
+.swipe-preview-pages{display:flex;flex-direction:row-reverse;align-items:center;justify-content:center;gap:8px;padding:16px;width:100%;height:100%;box-sizing:border-box}
+.swipe-preview-pages canvas{display:block;flex:none;box-shadow:0 3px 12px #0002;background:white}
+.swipe-preview-label{position:absolute;top:max(24px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);width:min(330px,calc(100% - 32px));padding:12px 16px;display:flex;flex-direction:column;gap:6px;border-radius:10px;background:#171717e8;color:white;box-shadow:0 4px 20px #0003}
+.swipe-preview-label strong{font-size:18px}.swipe-preview-label span{font-size:14px}
+.swipe-loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80%;padding:12px;background:#f4f3eff0;border-radius:8px;font-size:13px}.swipe-loading[hidden]{display:none}

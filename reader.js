@@ -147,22 +147,78 @@ document.addEventListener('pointermove', event => {
 document.addEventListener('pointerleave', () => {
   document.body.classList.remove('near-top', 'near-bottom', 'near-left', 'near-right');
 });
+// Render destination pages separately without committing the reading position.
+let swipeRenderRevision = 0, swipeRenderTarget = null, swipeRenderTasks = [];
+function cancelSwipePages() {
+  ++swipeRenderRevision;
+  swipeRenderTarget = null;
+  for (const task of swipeRenderTasks) task.cancel();
+  swipeRenderTasks = [];
+}
+async function renderSwipePages(target) {
+  if (target === swipeRenderTarget) return;
+  cancelSwipePages();
+  swipeRenderTarget = target;
+  const token = swipeRenderRevision;
+  const pdf = documentPdf;
+  const box = $('swipe-pages');
+  box.replaceChildren();
+  box.setAttribute('aria-busy', 'true');
+  $('swipe-loading').hidden = false;
+  $('swipe-loading').textContent = '移動先を読み込んでいます…';
+  const numbers = [target];
+  if ($('mode').value === 'spread' && !($('cover').checked && target === 1) && target < pdf.numPages) numbers.push(target + 1);
+  try {
+    const width = Math.max(50, ($('stage').clientWidth - 32 - (numbers.length - 1) * 8) / numbers.length);
+    const height = Math.max(50, $('stage').clientHeight - 32);
+    const canvases = await Promise.all(numbers.map(async number => {
+      const page = await pdf.getPage(number);
+      if (token !== swipeRenderRevision) return null;
+      const normal = page.getViewport({ scale: 1 });
+      const scale = Math.min(width / normal.width, height / normal.height);
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const viewport = page.getViewport({ scale: scale * ratio });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      canvas.style.width = viewport.width / ratio + 'px'; canvas.style.height = viewport.height / ratio + 'px';
+      canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', number + 'ページのプレビュー');
+      const task = page.render({ canvasContext: canvas.getContext('2d'), viewport });
+      swipeRenderTasks.push(task);
+      await task.promise;
+      return canvas;
+    }));
+    if (token !== swipeRenderRevision) return;
+    box.replaceChildren(...canvases);
+    $('swipe-loading').hidden = true;
+  } catch (error) {
+    if (token !== swipeRenderRevision) return;
+    swipeRenderTarget = null;
+    $('swipe-loading').textContent = 'プレビューを表示できません。ページ番号を確認して指を離してください。';
+  } finally {
+    if (token === swipeRenderRevision) box.setAttribute('aria-busy', 'false');
+  }
+}
+
 // Touch navigation previews a destination and commits only on release.
 let touchGesture = null, pendingTap = null, pendingTapTimer, longPressTimer;
 function clearPendingTap() {
   clearTimeout(pendingTapTimer);
   pendingTap = null;
 }
-function hideSwipePreview() { $('swipe-preview').hidden = true; }
+function hideSwipePreview() {
+  $('swipe-preview').hidden = true;
+  cancelSwipePages();
+  $('swipe-pages').replaceChildren();
+}
 function cancelTouchNavigation() {
   clearTimeout(longPressTimer);
   touchGesture = null;
   clearPendingTap();
   hideSwipePreview();
 }
-function swipeDestination(origin, direction, distance, extent) {
+function swipeDestination(origin, direction, distance, extent, fixed = false) {
   const interval = Math.max(18, (extent * .8 - 40) / 9);
-  const steps = Math.min(10, 1 + Math.floor(Math.max(0, distance - 40) / interval));
+  const steps = fixed ? 1 : Math.min(10, 1 + Math.floor(Math.max(0, distance - 40) / interval));
   let target = first(Math.max(1, Math.min(documentPdf.numPages, origin + direction * steps)));
   // Preserve spread grouping while still making a short swipe turn one spread.
   if (target === origin && direction > 0) {
@@ -188,7 +244,7 @@ function updateSwipe(gesture, x, y) {
   const delta = gesture.axis === 'x' ? dx : dy;
   gesture.distance = Math.abs(delta);
   gesture.direction = gesture.axis === 'x' ? (delta > 0 ? 1 : -1) : (delta < 0 ? 1 : -1);
-  gesture.target = swipeDestination(gesture.origin, gesture.direction, gesture.distance, gesture.axis === 'x' ? $('stage').clientWidth : $('stage').clientHeight);
+  gesture.target = swipeDestination(gesture.origin, gesture.direction, gesture.distance, gesture.axis === 'x' ? $('stage').clientWidth : $('stage').clientHeight, gesture.axis === 'x');
   hideTouchControls();
   clearPendingTap();
   const last = $('mode').value === 'spread' && !($('cover').checked && gesture.target === 1) ? Math.min(documentPdf.numPages, gesture.target + 1) : gesture.target;
@@ -198,6 +254,7 @@ function updateSwipe(gesture, x, y) {
   $('swipe-distance').textContent = gesture.distance < 40 ? 'そのまま動かすと移動します' : actual ? actual + 'ページ' + (gesture.direction > 0 ? '先へ' : '前へ') + ' · 指を離して確定' : 'これ以上移動できません';
   $('swipe-progress').value = Math.min(10, actual);
   $('swipe-preview').hidden = false;
+  renderSwipePages(gesture.target);
 }
 function handleReadingTap(x, y) {
   const rect = $('stage').getBoundingClientRect();
